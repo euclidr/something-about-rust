@@ -1,0 +1,7 @@
+[package]
+name = "rfeatures"
+version = "0.1.0"
+authors = ["Euclidr <euclidry@gmail.com>"]
+edition = "2018"
+
+[dependencies]
