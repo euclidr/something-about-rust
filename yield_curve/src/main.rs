@@ -1,15 +1,21 @@
+extern crate chrono;
 extern crate futures;
 extern crate hyper;
 extern crate hyper_tls;
 extern crate select;
 extern crate serde_json;
+extern crate url;
+
+mod handler;
+mod yc_error;
 
 use futures::{future, Future, Stream};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::From;
 use std::error;
 use std::error::Error;
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use hyper::client::HttpConnector;
 use hyper::service::service_fn;
@@ -27,6 +33,7 @@ static BOND_URL: &str = "https://www.treasury.gov/resource-center/data-chart-cen
 type GenericError = Box<dyn std::error::Error + Send + Sync>;
 type ResponseFuture = Box<Future<Item = Response<Body>, Error = GenericError> + Send>;
 type HttpsClient = Client<HttpsConnector<HttpConnector>>;
+type ShareDict = Arc<Mutex<BTreeMap<String, String>>>;
 
 #[derive(Debug, Clone)]
 struct XError {
@@ -68,11 +75,11 @@ fn extract_row(row: &Node, keys: &Vec<String>) -> Option<HashMap<String, String>
 
     let mut record = HashMap::new();
     for (i, td) in row.find(Name("td")).enumerate() {
-       record.insert(keys[i].clone(), td.text());
+        record.insert(keys[i].clone(), td.text());
     }
 
     Some(record)
-} 
+}
 
 fn extract_yield_data(text: &str) -> Result<String, GenericError> {
     let document = Document::from(&text[..]);
@@ -95,7 +102,11 @@ fn extract_yield_data(text: &str) -> Result<String, GenericError> {
             }
             data
         }
-        None => return Err(From::from(XError{msg: "table notfound".to_string()})),
+        None => {
+            return Err(From::from(XError {
+                msg: "table notfound".to_string(),
+            }))
+        }
     };
 
     let data_str = serde_json::to_string(&data)?;
@@ -120,13 +131,11 @@ fn handle_bond_yield(_: Request<Body>, client: &HttpsClient) -> ResponseFuture {
                     .map(|chunk| String::from(std::str::from_utf8(&chunk).unwrap())),
             )
         })
-        .and_then(|text| {
-            match extract_yield_data(&text) {
-                Ok(data_str) => future::ok(data_str),
-                Err(err) => future::err(XError {
-                    msg: err.to_string()
-                }),
-            }
+        .and_then(|text| match extract_yield_data(&text) {
+            Ok(data_str) => future::ok(data_str),
+            Err(err) => future::err(XError {
+                msg: err.to_string(),
+            }),
         })
         .then(|result| {
             match result {
@@ -143,13 +152,14 @@ fn handle_bond_yield(_: Request<Body>, client: &HttpsClient) -> ResponseFuture {
     Box::new(r)
 }
 
-fn route(req: Request<Body>, client: &HttpsClient) -> ResponseFuture {
+fn route(req: Request<Body>, client: &HttpsClient, bondData: &ShareDict) -> ResponseFuture {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/") | (&Method::GET, "/index.html") => {
             let body = Body::from(INDEX);
             Box::new(future::ok(Response::new(body)))
         }
         (&Method::GET, "/bond_yield") => handle_bond_yield(req, client),
+        (&Method::GET, "/bond_by_date") => handler::handle_by_date(req, client, bondData),
         _ => {
             let body = Body::from(NOTFOUND);
             Box::new(future::ok(
@@ -168,10 +178,13 @@ fn main() {
     hyper::rt::run(future::lazy(move || {
         let https = HttpsConnector::new(4).unwrap();
         let client = Client::builder().build::<_, hyper::Body>(https);
+        let _bondData = BTreeMap::<String, String>::new();
+        let bondData = Arc::new(Mutex::new(_bondData));
 
         let new_service = move || {
             let client = client.clone();
-            service_fn(move |req| route(req, &client))
+            let bondData = Arc::clone(&bondData);
+            service_fn(move |req| route(req, &client, &bondData))
         };
 
         let server = Server::bind(&addr)
