@@ -5,9 +5,13 @@ extern crate hyper_tls;
 extern crate select;
 extern crate serde_json;
 extern crate url;
+#[macro_use]
+extern crate lazy_static;
 
 mod handler;
-mod yc_error;
+mod ycerror;
+mod sharekv;
+mod client;
 
 use futures::{future, Future, Stream};
 use std::collections::{BTreeMap, HashMap};
@@ -113,53 +117,53 @@ fn extract_yield_data(text: &str) -> Result<String, GenericError> {
     Ok(data_str)
 }
 
-fn handle_bond_yield(_: Request<Body>, client: &HttpsClient) -> ResponseFuture {
-    let uri = BOND_URL.parse().unwrap();
-    let r = client
-        .get(uri)
-        .map_err(|e| XError { msg: e.to_string() })
-        .and_then(|resp| {
-            if !resp.status().is_success() {
-                return future::Either::A(future::err(XError {
-                    msg: "Invalid code".to_string(),
-                }));
-            };
-            future::Either::B(
-                resp.into_body()
-                    .concat2()
-                    .map_err(|e| XError { msg: e.to_string() })
-                    .map(|chunk| String::from(std::str::from_utf8(&chunk).unwrap())),
-            )
-        })
-        .and_then(|text| match extract_yield_data(&text) {
-            Ok(data_str) => future::ok(data_str),
-            Err(err) => future::err(XError {
-                msg: err.to_string(),
-            }),
-        })
-        .then(|result| {
-            match result {
-                Ok(data) => future::ok(Response::new(Body::from(data))),
-                Err(e) => future::ok(Response::new(Body::from(e.to_string()))),
-                // #[warn(unreachable_patterns)]
-                _ => future::err(XError {
-                    msg: "will not happen".to_string(),
-                }),
-            }
-        })
-        .from_err();
+// fn handle_bond_yield(_: Request<Body>, client: &HttpsClient) -> ResponseFuture {
+//     let uri = BOND_URL.parse().unwrap();
+//     let r = client
+//         .get(uri)
+//         .map_err(|e| XError { msg: e.to_string() })
+//         .and_then(|resp| {
+//             if !resp.status().is_success() {
+//                 return future::Either::A(future::err(XError {
+//                     msg: "Invalid code".to_string(),
+//                 }));
+//             };
+//             future::Either::B(
+//                 resp.into_body()
+//                     .concat2()
+//                     .map_err(|e| XError { msg: e.to_string() })
+//                     .map(|chunk| String::from(std::str::from_utf8(&chunk).unwrap())),
+//             )
+//         })
+//         .and_then(|text| match extract_yield_data(&text) {
+//             Ok(data_str) => future::ok(data_str),
+//             Err(err) => future::err(XError {
+//                 msg: err.to_string(),
+//             }),
+//         })
+//         .then(|result| {
+//             match result {
+//                 Ok(data) => future::ok(Response::new(Body::from(data))),
+//                 Err(e) => future::ok(Response::new(Body::from(e.to_string()))),
+//                 // #[warn(unreachable_patterns)]
+//                 _ => future::err(XError {
+//                     msg: "will not happen".to_string(),
+//                 }),
+//             }
+//         })
+//         .from_err();
 
-    Box::new(r)
-}
+//     Box::new(r)
+// }
 
-fn route(req: Request<Body>, client: &HttpsClient, bondData: &ShareDict) -> ResponseFuture {
+fn route(req: Request<Body>) -> ResponseFuture {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/") | (&Method::GET, "/index.html") => {
             let body = Body::from(INDEX);
             Box::new(future::ok(Response::new(body)))
         }
-        (&Method::GET, "/bond_yield") => handle_bond_yield(req, client),
-        (&Method::GET, "/bond_by_date") => handler::handle_by_date(req, client, bondData),
+        // (&Method::GET, "/bond_yield") => handle_bond_yield(req),
+        (&Method::GET, "/bond_by_date") => handler::handle_by_date(req),
         _ => {
             let body = Body::from(NOTFOUND);
             Box::new(future::ok(
@@ -176,15 +180,8 @@ fn main() {
     let addr = "127.0.0.1:2008".parse().unwrap();
 
     hyper::rt::run(future::lazy(move || {
-        let https = HttpsConnector::new(4).unwrap();
-        let client = Client::builder().build::<_, hyper::Body>(https);
-        let _bondData = BTreeMap::<String, String>::new();
-        let bondData = Arc::new(Mutex::new(_bondData));
-
         let new_service = move || {
-            let client = client.clone();
-            let bondData = Arc::clone(&bondData);
-            service_fn(move |req| route(req, &client, &bondData))
+            service_fn(move |req| route(req))
         };
 
         let server = Server::bind(&addr)
