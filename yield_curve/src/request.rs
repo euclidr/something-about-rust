@@ -9,6 +9,7 @@ use select::node::Node;
 use select::predicate::{Class, Name};
 
 use crate::ycerror::YCError;
+use crate::YCFuture;
 
 type YCClient = Client<HttpsConnector<HttpConnector>>;
 
@@ -23,10 +24,10 @@ pub fn cli() -> YCClient {
     CLIENT.clone()
 }
 
-pub fn get(url_str: &str) -> Box<Future<Item = String, Error = YCError> + Send> {
+pub fn get(url_str: &str) -> YCFuture<String> {
     let url = match url_str.parse() {
         Ok(url) => url,
-        Err(err) => return Box::new(future::err(YCError::ParseURL(err))),
+        Err(err) => return Box::new(future::err(From::from(err))),
     };
     let r = cli()
         .get(url)
@@ -52,8 +53,8 @@ pub fn get(url_str: &str) -> Box<Future<Item = String, Error = YCError> + Send> 
 pub fn yield_of_year(
     year: &str,
 ) -> Box<Future<Item = Vec<HashMap<String, String>>, Error = YCError> + Send> {
-    const sub_url: &str = "https://www.treasury.gov/resource-center/data-chart-center/interest-rates/pages/TextView.aspx?data=yieldYear";
-    let url_str = format!("{}&year={}", sub_url, year);
+    const SUB_URL: &str = "https://www.treasury.gov/resource-center/data-chart-center/interest-rates/pages/TextView.aspx?data=yieldYear";
+    let url_str = format!("{}&year={}", SUB_URL, year);
     let r = get(&url_str).and_then(|text| match extract_yield_data(&text) {
         Ok(data) => future::ok(data),
         Err(err) => future::err(err),

@@ -1,43 +1,41 @@
 extern crate http;
 
-use crate::client;
+use crate::request;
 use crate::sharekv;
-use crate::ycerror;
-
-use ycerror::YCError;
+use crate::ycerror::YCError;
+use crate::{ResponseFuture, YCFuture, YCResult};
 
 use chrono::prelude::*;
-use futures::{future, Future, Stream};
+use futures::{future, Future};
 use http::header::HOST;
+use http::StatusCode;
 use hyper::{Body, Request, Response};
 use std::collections::HashMap;
 use std::convert::From;
 use time::Duration;
 use url::Url;
 
-type GenericError = Box<dyn std::error::Error + Send + Sync>;
-type ResponseFuture = Box<Future<Item = Response<Body>, Error = GenericError> + Send>;
-
-fn get_query_params(req: &Request<Body>) -> Result<HashMap<String, String>, GenericError> {
+fn get_query_params(req: &Request<Body>) -> YCResult<HashMap<String, String>> {
     let uri_string = req.uri().to_string();
+    // uri_string does not contain http://a.b.c
+    // so we need to complete it into full URL
     let host = match req.headers().get(HOST) {
         Some(host_header) => host_header.to_str()?,
         None => "localhost",
     };
     let url_string = format!("http://{}{}", host, uri_string);
-    println!("{}", &url_string);
-    let request_url = Url::parse(&url_string).unwrap();
+    let request_url = Url::parse(&url_string)?;
     Ok(request_url.query_pairs().into_owned().collect())
 }
 
-fn get_remote_bond_yield(date: String) -> Box<Future<Item = String, Error = YCError> + Send> {
+fn get_remote_bond_yield(date: String) -> YCFuture<String> {
     let year = &date[..4];
-    let r = client::yield_of_year(year).and_then(move |data| {
-        for dateRecord in data {
-            let date = dateRecord.get("Date").unwrap();
+    let r = request::yield_of_year(year).and_then(move |data| {
+        for date_record in data {
+            let date = date_record.get("Date").unwrap();
             let date = NaiveDate::parse_from_str(&date, "%m/%d/%y").unwrap();
             let date = date.format("%Y-%m-%d").to_string();
-            sharekv::set(&date, &serde_json::to_string(&dateRecord).unwrap());
+            sharekv::set(&date, &serde_json::to_string(&date_record).unwrap());
         }
         match sharekv::get(&date) {
             Some(val) => future::ok(val),
@@ -47,18 +45,28 @@ fn get_remote_bond_yield(date: String) -> Box<Future<Item = String, Error = YCEr
     Box::new(r)
 }
 
+fn response_with_status(status: StatusCode, body: &str) -> ResponseFuture {
+    Box::new(future::ok(
+        Response::builder()
+            .status(status)
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+    ))
+}
+
 pub fn handle_by_date(req: Request<Body>) -> ResponseFuture {
     let params = match get_query_params(&req) {
         Ok(value) => value,
-        Err(e) => return Box::new(future::ok(Response::new(Body::from(e.to_string())))),
+        Err(e) => return response_with_status(StatusCode::BAD_REQUEST, &e.to_string()),
     };
     let mut date = match params.get("date") {
         Some(val) => match NaiveDate::parse_from_str(val, "%Y-%m-%d") {
             Ok(date) => date,
-            Err(e) => return Box::new(future::err(From::from(e))),
+            Err(e) => return response_with_status(StatusCode::BAD_REQUEST, &e.to_string()),
         },
-        None => return Box::new(future::err(From::from("not found"))),
+        None => return response_with_status(StatusCode::NOT_FOUND, "not found"),
     };
+
     date = match date.weekday() {
         Weekday::Thu => date + Duration::days(-1),
         Weekday::Sun => date + Duration::days(-2),
