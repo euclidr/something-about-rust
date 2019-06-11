@@ -55,7 +55,7 @@ fn response_with_status(status: StatusCode, body: &str) -> ResponseFuture {
     ))
 }
 
-/// handle path: /bond_by_date?date=<%Y-%m-%d>
+/// handle path: /yield_by_date?date=<%Y-%m-%d>
 ///
 /// returns bond yields on that day
 ///

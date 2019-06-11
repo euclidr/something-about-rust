@@ -12,6 +12,7 @@ mod handler;
 mod request;
 mod sharekv;
 mod ycerror;
+mod store;
 
 use futures::{future, Future};
 use hyper::service::service_fn;
@@ -33,7 +34,7 @@ fn route(req: Request<Body>) -> ResponseFuture {
             let body = Body::from(INDEX);
             Box::new(future::ok(Response::new(body)))
         }
-        (&Method::GET, "/bond_by_date") => handler::handle_by_date(req),
+        (&Method::GET, "/yield_by_date") => handler::handle_by_date(req),
         _ => {
             let body = Body::from(NOTFOUND);
             Box::new(future::ok(

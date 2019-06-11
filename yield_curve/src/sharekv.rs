@@ -89,8 +89,6 @@ impl DB {
     }
 }
 
-// TODO make it persistent
-
 pub fn get(key: &str) -> Option<String> {
     let db = SHARE_DB.read().unwrap();
     db.get(key)
