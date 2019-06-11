@@ -15,6 +15,7 @@ use std::convert::From;
 use time::Duration;
 use url::Url;
 
+/// get query params from request
 fn get_query_params(req: &Request<Body>) -> YCResult<HashMap<String, String>> {
     let uri_string = req.uri().to_string();
     // uri_string does not contain http://a.b.c
@@ -54,6 +55,10 @@ fn response_with_status(status: StatusCode, body: &str) -> ResponseFuture {
     ))
 }
 
+/// handle path: /bond_by_date?date=<%Y-%m-%d>
+///
+/// returns bond yields on that day
+///
 pub fn handle_by_date(req: Request<Body>) -> ResponseFuture {
     let params = match get_query_params(&req) {
         Ok(value) => value,
@@ -93,14 +98,17 @@ pub fn handle_by_date(req: Request<Body>) -> ResponseFuture {
     Box::new(rs)
 }
 
+#[allow(dead_code)]
 pub fn handle_by_term() {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
     use chrono::prelude::*;
     use std::collections::BTreeMap;
     use std::ops::Bound::{Excluded, Included};
+
     #[test]
     fn parse_date() {
         let result = NaiveDate::parse_from_str("2007-01-03", "%Y-%m-%d");

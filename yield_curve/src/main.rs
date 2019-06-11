@@ -14,8 +14,6 @@ mod sharekv;
 mod ycerror;
 
 use futures::{future, Future};
-// use std::convert::From;
-
 use hyper::service::service_fn;
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
 
@@ -50,6 +48,7 @@ fn route(req: Request<Body>) -> ResponseFuture {
 
 fn main() {
     let addr = "127.0.0.1:2008".parse().unwrap();
+    sharekv::init("kv.db");
 
     hyper::rt::run(future::lazy(move || {
         let new_service = move || service_fn(move |req| route(req));
