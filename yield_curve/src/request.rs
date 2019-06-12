@@ -8,6 +8,9 @@ use select::document::Document;
 use select::node::Node;
 use select::predicate::{Class, Name};
 
+use std::fs::File;
+use std::io::prelude::*;
+
 use crate::ycerror::YCError;
 use crate::YCFuture;
 
@@ -36,12 +39,16 @@ pub fn cli() -> YCClient {
 ///     invalid response text
 ///     
 pub fn get(url_str: &str) -> YCFuture<String> {
-    let url = match url_str.parse() {
-        Ok(url) => url,
-        Err(err) => return Box::new(future::err(From::from(err))),
-    };
+    // match url_str.parse() {
+    //     Ok(url) => url,
+    //     Err(err) => return Box::new(future::err(From::from(err))),
+    // };
+    let mut req = hyper::Request::builder();
+    req.uri(url_str).header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.80 Safari/537.36");
+    let req = req.body(Body::from("")).unwrap();
+
     let r = cli()
-        .get(url)
+        .request(req)
         .map_err(|err| YCError::Hyper(err))
         .and_then(|resp| {
             if !resp.status().is_success() {
@@ -75,11 +82,16 @@ pub fn get(url_str: &str) -> YCFuture<String> {
 pub fn yield_of_year(
     year: &str,
 ) -> Box<Future<Item = Vec<HashMap<String, String>>, Error = YCError> + Send> {
+    let year_str = year.to_string();
     const SUB_URL: &str = "https://www.treasury.gov/resource-center/data-chart-center/interest-rates/pages/TextView.aspx?data=yieldYear";
     let url_str = format!("{}&year={}", SUB_URL, year);
-    let r = get(&url_str).and_then(|text| match extract_yield_data(&text) {
+    let r = get(&url_str).and_then(move |text| match extract_yield_data(&text) {
         Ok(data) => future::ok(data),
-        Err(err) => future::err(err),
+        Err(err) => {
+            let mut file = File::create(&year_str).unwrap();
+            file.write_all(text.as_bytes()).unwrap();
+            future::err(err)
+        }
     });
     Box::new(r)
 }

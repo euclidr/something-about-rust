@@ -1,8 +1,7 @@
 extern crate http;
 
 use crate::request;
-use crate::sharekv;
-use crate::store::Yield;
+use crate::store::{self, Yield};
 use crate::ycerror::YCError;
 use crate::{ResponseFuture, YCFuture, YCResult};
 
@@ -32,6 +31,7 @@ fn get_query_params(req: &Request<Body>) -> YCResult<HashMap<String, String>> {
 
 fn get_remote_bond_yield(date: String) -> YCFuture<Yield> {
     let year = &date[..4];
+    let year_string = year.to_string();
     let r = request::yield_of_year(year).and_then(move |data| {
         for date_record in data {
             match Yield::new(&date_record) {
@@ -42,6 +42,7 @@ fn get_remote_bond_yield(date: String) -> YCFuture<Yield> {
                 }
             }
         }
+        store::record_synced_year(&year_string);
         match Yield::get(&date) {
             Some(val) => future::ok(val),
             None => future::err(YCError::DataNotFound(date.clone())),
@@ -73,7 +74,7 @@ pub fn handle_by_date(req: Request<Body>) -> ResponseFuture {
             Ok(date) => date,
             Err(e) => return response_with_status(StatusCode::BAD_REQUEST, &e.to_string()),
         },
-        None => return response_with_status(StatusCode::NOT_FOUND, "not found"),
+        None => return response_with_status(StatusCode::BAD_REQUEST, "missing date param"),
     };
 
     date = match date.weekday() {
@@ -83,23 +84,32 @@ pub fn handle_by_date(req: Request<Body>) -> ResponseFuture {
     };
 
     let date = date.format("%Y-%m-%d").to_string();
-    let result = {
-        match Yield::get(&date) {
-            Some(val) => {
-                Some(val.to_json_string())
-            }
-            None => None,
-        }
+    match Yield::get(&date) {
+        Some(val) => return Box::new(future::ok(Response::new(Body::from(val.to_json_string())))),
+        None => (),
     };
 
-    if result.is_some() {
-        let val = result.unwrap();
-        return Box::new(future::ok(Response::new(Body::from(val))));
+    if store::is_synced(&date) {
+        return Box::new(future::ok(Response::new(Body::from("no data"))));
     }
 
     let rs = get_remote_bond_yield(date)
-        .map(|val| {
-            Response::new(Body::from(val.to_json_string()))
+        .map(|val| Response::new(Body::from(val.to_json_string())))
+        .then(|result| match result {
+            Ok(val) => future::ok(val),
+            Err(YCError::DataNotFound(_)) => future::ok(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Body::from("not found"))
+                    .unwrap(),
+            ),
+            Err(err) => future::ok(
+                Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from(err.to_string()))
+                    .unwrap(),
+            ),
+            _ => future::err("not exist"),
         })
         .from_err();
 

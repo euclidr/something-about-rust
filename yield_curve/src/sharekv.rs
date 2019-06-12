@@ -62,7 +62,7 @@ impl DB {
             Err(e) => return Err(Error::IO(e)),
         };
 
-        let fw = OpenOptions::new().write(true).create(true).open(path)?;
+        let fw = OpenOptions::new().write(true).append(true).create(true).open(path)?;
         self.writer = Some(fw);
         Ok(())
     }

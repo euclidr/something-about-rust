@@ -10,16 +10,23 @@ extern crate serde_derive;
 extern crate url;
 #[macro_use]
 extern crate lazy_static;
+extern crate futures_timer;
 
 mod handler;
 mod request;
 mod sharekv;
-mod ycerror;
 mod store;
+mod syncer;
+mod ycerror;
 
+use chrono::prelude::*;
+use futures::prelude::*;
 use futures::{future, Future};
+use futures_timer::Interval;
+use futures::stream::iter_ok;
 use hyper::service::service_fn;
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
+use std::time::Duration;
 
 use ycerror::YCError;
 
@@ -62,6 +69,40 @@ fn main() {
             .map_err(|e| eprintln!("serve error: {}", e));
 
         println!("Listening on http://{}", addr);
+
+        let mut years = vec![];
+        let cur = Utc::now();
+        for year in 1991..cur.year() {
+            years.push(format!("{}", year));
+        }
+
+        let startup_sync = iter_ok(years).for_each(|item| {
+            syncer::sync_year(&item).then(|result| match result {
+                Ok(_) => {
+                    println!("synced");
+                    future::ok(())
+                }
+                Err(err) => {
+                    println!("error: {}", err.to_string());
+                    future::ok(())
+                }
+            })
+        });
+
+        hyper::rt::spawn(startup_sync);
+
+        // let cron = future::ok(1).and_then(|_| {
+        //     Interval::new(Duration::from_secs(5))
+        //         .for_each(|()| {
+        //             println!("hahah");
+        //             Ok(())
+        //         })
+        //         .wait()
+        //         .unwrap_or(()); // ignore the error;
+        //     future::ok(())
+        // });
+
+        // hyper::rt::spawn(cron);
 
         server
     }))

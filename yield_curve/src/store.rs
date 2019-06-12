@@ -72,9 +72,9 @@ impl Yield {
     }
 }
 
-/// record fetch year, if it's current year mark down the date
-pub fn record_fetch_year(year: &str) {
-    let key_year = format!("fetched_year:{}", year);
+/// record synced year, if it's current year mark down the date
+pub fn record_synced_year(year: &str) {
+    let key_year = format!("synced_year:{}", year);
     let date = Utc::now();
     if date.year().to_string() != year {
         sharekv::set(&key_year, "1");
@@ -84,16 +84,17 @@ pub fn record_fetch_year(year: &str) {
     }
 }
 
-/// check if data in that day is fetched
-pub fn is_fetched(date: &str) -> bool {
+/// check if data in that day is synced 
+/// if date is after today return true
+pub fn is_synced(date: &str) -> bool {
     let today = Utc::now();
     let today_str = today.format("%Y-%m-%d").to_string();
     if date >= &today_str[..] {
-        return false;
+        return true;
     }
 
     let year = &date[..4];
-    let key_year = format!("fetchd_year:{}", year);
+    let key_year = format!("synced_year:{}", year);
     let latest = match sharekv::get(&key_year) {
         Some(latest) => latest,
         None => return false,
