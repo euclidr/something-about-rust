@@ -14,6 +14,7 @@ pub enum YCError {
     InvalidUri(InvalidUri),
     ToStrError(ToStrError),
     UrlParseError(ParseError),
+    InvalidData,
 }
 
 impl fmt::Display for YCError {
@@ -25,6 +26,7 @@ impl fmt::Display for YCError {
             YCError::InvalidUri(err) => write!(f, "invalide uri: {}", err),
             YCError::ToStrError(err) => write!(f, "to string error: {}", err),
             YCError::UrlParseError(err) => write!(f, "url parse error: {}", err),
+            YCError::InvalidData => write!(f, "invalid data"),
         }
     }
 }
@@ -38,6 +40,7 @@ impl error::Error for YCError {
             YCError::InvalidUri(err) => err.description(),
             YCError::ToStrError(err) => err.description(),
             YCError::UrlParseError(err) => err.description(),
+            YCError::InvalidData => "invalid data",
         }
     }
 

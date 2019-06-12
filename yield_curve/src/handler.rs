@@ -2,6 +2,7 @@ extern crate http;
 
 use crate::request;
 use crate::sharekv;
+use crate::store::Yield;
 use crate::ycerror::YCError;
 use crate::{ResponseFuture, YCFuture, YCResult};
 
@@ -29,16 +30,19 @@ fn get_query_params(req: &Request<Body>) -> YCResult<HashMap<String, String>> {
     Ok(request_url.query_pairs().into_owned().collect())
 }
 
-fn get_remote_bond_yield(date: String) -> YCFuture<String> {
+fn get_remote_bond_yield(date: String) -> YCFuture<Yield> {
     let year = &date[..4];
     let r = request::yield_of_year(year).and_then(move |data| {
         for date_record in data {
-            let date = date_record.get("Date").unwrap();
-            let date = NaiveDate::parse_from_str(&date, "%m/%d/%y").unwrap();
-            let date = date.format("%Y-%m-%d").to_string();
-            sharekv::set(&date, &serde_json::to_string(&date_record).unwrap());
+            match Yield::new(&date_record) {
+                Ok(y) => y.save(),
+                Err(err) => {
+                    println!("new yield data error: {}", err);
+                    continue;
+                }
+            }
         }
-        match sharekv::get(&date) {
+        match Yield::get(&date) {
             Some(val) => future::ok(val),
             None => future::err(YCError::DataNotFound(date.clone())),
         }
@@ -80,8 +84,10 @@ pub fn handle_by_date(req: Request<Body>) -> ResponseFuture {
 
     let date = date.format("%Y-%m-%d").to_string();
     let result = {
-        match sharekv::get(&date) {
-            Some(val) => Some(val),
+        match Yield::get(&date) {
+            Some(val) => {
+                Some(val.to_json_string())
+            }
             None => None,
         }
     };
@@ -92,7 +98,9 @@ pub fn handle_by_date(req: Request<Body>) -> ResponseFuture {
     }
 
     let rs = get_remote_bond_yield(date)
-        .map(|val| Response::new(Body::from(val)))
+        .map(|val| {
+            Response::new(Body::from(val.to_json_string()))
+        })
         .from_err();
 
     Box::new(rs)
