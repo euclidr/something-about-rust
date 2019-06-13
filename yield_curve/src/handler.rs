@@ -1,9 +1,8 @@
 extern crate http;
 
-use crate::request;
-use crate::store::{self, Yield};
-use crate::ycerror::YCError;
-use crate::{ResponseFuture, YCFuture, YCResult};
+use crate::store::Yield;
+use crate::syncer::{is_synced, sync_year};
+use crate::{ResponseFuture, YCResult};
 
 use chrono::prelude::*;
 use futures::{future, Future};
@@ -27,28 +26,6 @@ fn get_query_params(req: &Request<Body>) -> YCResult<HashMap<String, String>> {
     let url_string = format!("http://{}{}", host, uri_string);
     let request_url = Url::parse(&url_string)?;
     Ok(request_url.query_pairs().into_owned().collect())
-}
-
-fn get_remote_bond_yield(date: String) -> YCFuture<Yield> {
-    let year = &date[..4];
-    let year_string = year.to_string();
-    let r = request::yield_of_year(year).and_then(move |data| {
-        for date_record in data {
-            match Yield::new(&date_record) {
-                Ok(y) => y.save(),
-                Err(err) => {
-                    println!("new yield data error: {}", err);
-                    continue;
-                }
-            }
-        }
-        store::record_synced_year(&year_string);
-        match Yield::get(&date) {
-            Some(val) => future::ok(val),
-            None => future::err(YCError::DataNotFound(date.clone())),
-        }
-    });
-    Box::new(r)
 }
 
 fn response_with_status(status: StatusCode, body: &str) -> ResponseFuture {
@@ -89,20 +66,21 @@ pub fn handle_by_date(req: Request<Body>) -> ResponseFuture {
         None => (),
     };
 
-    if store::is_synced(&date) {
+    if is_synced(&date) {
         return Box::new(future::ok(Response::new(Body::from("no data"))));
     }
 
-    let rs = get_remote_bond_yield(date)
-        .map(|val| Response::new(Body::from(val.to_json_string())))
-        .then(|result| match result {
-            Ok(val) => future::ok(val),
-            Err(YCError::DataNotFound(_)) => future::ok(
-                Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::from("not found"))
-                    .unwrap(),
-            ),
+    let rs = sync_year(&date[..4])
+        .then(move |result| match result {
+            Ok(_) => match Yield::get(&date) {
+                Some(val) => future::ok(Response::new(Body::from(val.to_json_string()))),
+                None => future::ok(
+                    Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Body::from("not found"))
+                        .unwrap(),
+                ),
+            },
             Err(err) => future::ok(
                 Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)

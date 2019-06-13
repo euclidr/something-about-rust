@@ -10,7 +10,7 @@ extern crate serde_derive;
 extern crate url;
 #[macro_use]
 extern crate lazy_static;
-extern crate futures_timer;
+extern crate tokio;
 
 mod handler;
 mod request;
@@ -20,13 +20,14 @@ mod syncer;
 mod ycerror;
 
 use chrono::prelude::*;
+use chrono::Utc;
 use futures::prelude::*;
-use futures::{future, Future};
-use futures_timer::Interval;
 use futures::stream::iter_ok;
+use futures::{future, Future};
+use tokio::timer::Interval;
 use hyper::service::service_fn;
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ycerror::YCError;
 
@@ -57,6 +58,49 @@ fn route(req: Request<Body>) -> ResponseFuture {
     }
 }
 
+/// sync history data
+/// now it's synced with future stream, it's slow
+/// consider spawn a job per year simultaneously
+/// it must be called inside future runtime
+fn sync_history_data() {
+    let mut years = vec![];
+    let cur = Utc::now();
+    for year in 1990..(cur.year()+1) {
+        years.push(format!("{}", year));
+    }
+
+    let startup_sync = iter_ok(years).for_each(|item| {
+        syncer::sync_year(&item).then(|result| match result {
+            Ok(_) => future::ok(()),
+            Err(err) => {
+                println!("sync error: {}", err.to_string());
+                future::ok(())
+            }
+        })
+    });
+
+    hyper::rt::spawn(startup_sync);
+}
+
+/// sync latest data periodically
+fn periodic_sync_data() {
+    let cron = Interval::new(Instant::now(), Duration::from_secs(3600)).for_each(|a| {
+        let today = Utc::now();
+        let today_str = today.format("%Y-%m-%d").to_string();
+        if !syncer::is_synced(&today_str) {
+            let job = syncer::sync_year(&today.year().to_string()).map_err(|e| {
+                println!("sync error: {}", e.to_string());
+            });
+            hyper::rt::spawn(job);
+        }
+        Ok(())
+    }).map_err(|e| {
+        println!("periodic sync error: {}", e.to_string());
+    });
+
+    hyper::rt::spawn(cron);
+}
+
 fn main() {
     let addr = "127.0.0.1:2008".parse().unwrap();
     sharekv::init("kv.db");
@@ -70,39 +114,9 @@ fn main() {
 
         println!("Listening on http://{}", addr);
 
-        let mut years = vec![];
-        let cur = Utc::now();
-        for year in 1991..cur.year() {
-            years.push(format!("{}", year));
-        }
+        sync_history_data();
 
-        let startup_sync = iter_ok(years).for_each(|item| {
-            syncer::sync_year(&item).then(|result| match result {
-                Ok(_) => {
-                    println!("synced");
-                    future::ok(())
-                }
-                Err(err) => {
-                    println!("error: {}", err.to_string());
-                    future::ok(())
-                }
-            })
-        });
-
-        hyper::rt::spawn(startup_sync);
-
-        // let cron = future::ok(1).and_then(|_| {
-        //     Interval::new(Duration::from_secs(5))
-        //         .for_each(|()| {
-        //             println!("hahah");
-        //             Ok(())
-        //         })
-        //         .wait()
-        //         .unwrap_or(()); // ignore the error;
-        //     future::ok(())
-        // });
-
-        // hyper::rt::spawn(cron);
+        periodic_sync_data();
 
         server
     }))

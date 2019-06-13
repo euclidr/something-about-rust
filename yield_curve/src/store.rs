@@ -1,8 +1,6 @@
 use crate::sharekv;
 use crate::YCError;
 use chrono::prelude::*;
-use chrono::{Datelike, Utc};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -70,42 +68,4 @@ impl Yield {
     pub fn to_json_string(&self) -> String {
         serde_json::to_string(self).unwrap()
     }
-}
-
-/// record synced year, if it's current year mark down the date
-pub fn record_synced_year(year: &str) {
-    let key_year = format!("synced_year:{}", year);
-    let date = Utc::now();
-    if date.year().to_string() != year {
-        sharekv::set(&key_year, "1");
-    } else {
-        let date_str = date.format("%Y-%m-%d").to_string();
-        sharekv::set(&key_year, &date_str);
-    }
-}
-
-/// check if data in that day is synced 
-/// if date is after today return true
-pub fn is_synced(date: &str) -> bool {
-    let today = Utc::now();
-    let today_str = today.format("%Y-%m-%d").to_string();
-    if date >= &today_str[..] {
-        return true;
-    }
-
-    let year = &date[..4];
-    let key_year = format!("synced_year:{}", year);
-    let latest = match sharekv::get(&key_year) {
-        Some(latest) => latest,
-        None => return false,
-    };
-
-    if &latest == "1" {
-        return true;
-    }
-
-    if date > &latest[..] {
-        return false;
-    }
-    return true;
 }
