@@ -9,6 +9,8 @@ use futures::{future, Future};
 use http::header::HOST;
 use http::StatusCode;
 use hyper::{Body, Request, Response};
+use serde::Serialize;
+use serde_json::{self, json};
 use std::collections::HashMap;
 use std::convert::From;
 use time::Duration;
@@ -28,13 +30,59 @@ fn get_query_params(req: &Request<Body>) -> YCResult<HashMap<String, String>> {
     Ok(request_url.query_pairs().into_owned().collect())
 }
 
-fn response_with_status(status: StatusCode, body: &str) -> ResponseFuture {
-    Box::new(future::ok(
-        Response::builder()
-            .status(status)
-            .body(Body::from(body.to_string()))
-            .unwrap(),
-    ))
+fn abort(status: StatusCode) -> Response<hyper::Body> {
+    let status_text = status.canonical_reason().unwrap_or("unknown status");
+    let resp = Response::builder()
+        .status(status)
+        .body(Body::from(status_text))
+        .unwrap();
+    resp
+}
+
+fn ok_response<T: ?Sized>(data: &T) -> Response<hyper::Body>
+where
+    T: Serialize,
+{
+    let result = json!({
+        "code": 0,
+        "data": data
+    });
+    api_response(&result)
+}
+
+fn err_response(code: i32, msg: &str) -> Response<hyper::Body> {
+    let result = json!({
+        "code": code,
+        "msg": msg
+    });
+    api_response(&result)
+}
+
+fn api_response<T: ?Sized>(data: &T) -> Response<hyper::Body>
+where
+    T: Serialize,
+{
+    let result = serde_json::to_string(&data).unwrap_or("{\"code\": 100}".to_string());
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(result.to_string()))
+        .unwrap()
+}
+
+fn future_abort(status: StatusCode) -> ResponseFuture {
+    Box::new(future::ok(abort(status)))
+}
+
+fn future_ok_response<T: ?Sized>(data: &T) -> ResponseFuture
+where
+    T: Serialize,
+{
+    Box::new(future::ok(ok_response(data)))
+}
+
+fn future_err_response(code: i32, msg: &str) -> ResponseFuture {
+    Box::new(future::ok(err_response(code, msg)))
 }
 
 /// handle path: /yield_by_date?date=<%Y-%m-%d>
@@ -44,14 +92,14 @@ fn response_with_status(status: StatusCode, body: &str) -> ResponseFuture {
 pub fn handle_by_date(req: Request<Body>) -> ResponseFuture {
     let params = match get_query_params(&req) {
         Ok(value) => value,
-        Err(e) => return response_with_status(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(_) => return future_abort(StatusCode::BAD_REQUEST),
     };
     let mut date = match params.get("date") {
         Some(val) => match NaiveDate::parse_from_str(val, "%Y-%m-%d") {
             Ok(date) => date,
-            Err(e) => return response_with_status(StatusCode::BAD_REQUEST, &e.to_string()),
+            Err(_) => return future_abort(StatusCode::BAD_REQUEST),
         },
-        None => return response_with_status(StatusCode::BAD_REQUEST, "missing date param"),
+        None => return future_abort(StatusCode::BAD_REQUEST),
     };
 
     date = match date.weekday() {
@@ -62,31 +110,21 @@ pub fn handle_by_date(req: Request<Body>) -> ResponseFuture {
 
     let date = date.format("%Y-%m-%d").to_string();
     match Yield::get(&date) {
-        Some(val) => return Box::new(future::ok(Response::new(Body::from(val.to_json_string())))),
+        Some(val) => return future_ok_response(&val),
         None => (),
     };
 
     if is_synced(&date) {
-        return Box::new(future::ok(Response::new(Body::from("no data"))));
+        return future_err_response(1, "no data");
     }
 
     let rs = sync_year(&date[..4])
         .then(move |result| match result {
             Ok(_) => match Yield::get(&date) {
-                Some(val) => future::ok(Response::new(Body::from(val.to_json_string()))),
-                None => future::ok(
-                    Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(Body::from("not found"))
-                        .unwrap(),
-                ),
+                Some(val) => future::ok(ok_response(&val)),
+                None => future::ok(err_response(1, "no data")),
             },
-            Err(err) => future::ok(
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from(err.to_string()))
-                    .unwrap(),
-            ),
+            Err(_) => future::ok(abort(StatusCode::INTERNAL_SERVER_ERROR)),
             _ => future::err("not exist"),
         })
         .from_err();
