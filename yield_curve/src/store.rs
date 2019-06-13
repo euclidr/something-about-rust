@@ -65,7 +65,7 @@ impl Yield {
         sharekv::set(&key, &serde_json::to_string(self).unwrap());
     }
 
-    pub fn to_json_string(&self) -> String {
-        serde_json::to_string(self).unwrap()
-    }
+    // pub fn to_json_string(&self) -> String {
+    //     serde_json::to_string(self).unwrap()
+    // }
 }
