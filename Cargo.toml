@@ -9,4 +9,5 @@ edition = "2018"
 members = [
     "yield_curve",
     "rfeatures",
+    "radix-tree",
 ]
