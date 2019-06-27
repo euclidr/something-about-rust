@@ -1,37 +1,36 @@
 extern crate futures;
 extern crate hyper;
+extern crate tokio;
+
+use std::net::ToSocketAddrs;
 
 use futures::future;
-use hyper::header::{HeaderValue, UPGRADE};
+
 use hyper::rt::{self, Future};
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
-use hyper::{Body, Client, Method, Request, Response, Server, StatusCode};
-use std::io::{self, Read, Write};
-use std::net::{Shutdown, SocketAddr, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
+use hyper::{Body, Client, Method, Request, Response, Server};
+
 use tokio::io::{copy, shutdown};
 use tokio::net::TcpStream;
 use tokio::prelude::*;
 
-// https://github.com/tokio-rs/tokio/blob/master/tokio/examples_old/proxy.rs
-fn tcp_proxy(upgraded: Upgraded, host: String, port: u16) {
+// Create a TCP connection to host:port, build a tunnel between the connection and
+// the upgraded connection
+//
+// refer to https://github.com/tokio-rs/tokio/blob/master/tokio/examples_old/proxy.rs
+fn tunnel(upgraded: Upgraded, host: String, port: u16) {
     let remote_addr = format!("{}:{}", host, port);
     let remote_addr: Vec<_> = remote_addr
         .to_socket_addrs()
         .expect("Unable to resolve domain")
         .collect();
-    let server = TcpStream::connect(&remote_addr[0]);
-    let amounts = server.and_then(move |server| {
-        println!("adfasdfasdf-----{:?}", server);
-        println!("upgraded-----{:?}", upgraded);
-        let client_reader = MyTcpStream(Arc::new(Mutex::new(upgraded)));
-        let client_writer = client_reader.clone();
-        let server_reader = MyTcpStream(Arc::new(Mutex::new(server)));
-        let server_writer = server_reader.clone();
 
-        // let (client_reader, client_writer) = upgraded.split();
-        // let (server_reader, server_writer) = server.split();
+    let server = TcpStream::connect(&remote_addr[0]);
+
+    let connector = server.and_then(move |server| {
+        let (client_reader, client_writer) = upgraded.split();
+        let (server_reader, server_writer) = server.split();
 
         let client_to_server = copy(client_reader, server_writer)
             .and_then(|(n, _, server_writer)| shutdown(server_writer).map(move |_| n));
@@ -42,7 +41,7 @@ fn tcp_proxy(upgraded: Upgraded, host: String, port: u16) {
         client_to_server.join(server_to_client)
     });
 
-    let msg = amounts
+    let msg = connector
         .map(move |(from_client, from_server)| {
             println!(
                 "client wrote {} bytes and received {} bytes",
@@ -64,7 +63,14 @@ fn main() {
         let client = client_main.clone();
         service_fn(move |req: Request<Body>| {
             println!("req: {:?}", req);
+
             if Method::CONNECT == req.method() {
+                // When HTTP method is CONNECT we should return an empty body
+                // then we can eventually upgrade the connection and talk a new protocal.
+                //
+                // Note: only after client recieved an empty body with STATUS_OK can the
+                // connection be upgraded, so we can't return a response inside
+                // `on_upgrade` future.
                 let host = req.uri().host().unwrap().to_string();
                 let port = req.uri().port_u16().unwrap();
                 let on_upgrade = req
@@ -74,10 +80,11 @@ fn main() {
                         eprintln!("upgrade error: {}", err);
                     })
                     .map(move |upgraded| {
-                        tcp_proxy(upgraded, host, port);
+                        tunnel(upgraded, host, port);
                     });
 
                 rt::spawn(on_upgrade);
+
                 future::Either::A(future::ok(Response::new(Body::empty())))
             } else {
                 future::Either::B(client.request(req))
@@ -90,54 +97,4 @@ fn main() {
         .map_err(|e| eprintln!("server error: {}", e));
 
     rt::run(server);
-}
-
-// This is a custom type used to have a custom implementation of the
-// `AsyncWrite::shutdown` method which actually calls `TcpStream::shutdown` to
-// notify the remote end that we're done writing.
-struct MyTcpStream<T>(Arc<Mutex<T>>);
-
-impl<T> Clone for MyTcpStream<T> {
-    fn clone(&self) -> MyTcpStream<T> {
-        MyTcpStream(self.0.clone())
-    }
-}
-
-impl<T> Read for MyTcpStream<T>
-where
-    T: Read,
-{
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let rs = self.0.lock().unwrap().read(buf);
-        // println!("read: {:?}", buf);
-        rs
-    }
-}
-
-impl<T> Write for MyTcpStream<T>
-where
-    T: Write,
-{
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let rs = self.0.lock().unwrap().write(buf);
-        // println!("write: {:?}", buf);
-        rs
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<T> AsyncRead for MyTcpStream<T> where T: AsyncRead {}
-
-impl<T> AsyncWrite for MyTcpStream<T>
-where
-    T: AsyncWrite,
-{
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        println!("closed");
-        self.0.lock().unwrap().shutdown()?;
-        Ok(().into())
-    }
 }
