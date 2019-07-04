@@ -10,4 +10,9 @@ members = [
     "yield_curve",
     "rfeatures",
     "radix-tree",
+    "httproxy",
 ]
+
+[[examples]]
+name = "impl_trait_mut_param"
+path = "examples/impl_trait_mut_param.rs"
