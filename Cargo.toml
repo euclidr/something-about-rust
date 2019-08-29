@@ -4,10 +4,14 @@ version = "0.1.0"
 authors = ["Euclidr <euclidry@gmail.com>"]
 edition = "2018"
 
+[dependencies]
+rand = "0.7"
+
 [workspace]
 
 members = [
     "yield_curve",
     "rfeatures",
     "radix-tree",
+    "skiplist",
 ]
