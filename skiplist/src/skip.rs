@@ -1,7 +1,11 @@
 use rand::random;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
+use core::ops::{Bound, Index, RangeBounds};
+use core::marker::PhantomData;
+use std::fmt::Debug;
 
+#[derive(Debug)]
 struct Node<K, V> {
     nexts: Vec<*mut Node<K, V>>,
     next: Option<Box<Node<K, V>>>,
@@ -68,7 +72,63 @@ struct SkipList<K, V> {
     next: Option<Box<Node<K, V>>>,
 }
 
-impl<K: Ord, V> SkipList<K, V> {
+struct Range<'a, K, V> {
+    front: Option<&'a Node<K, V>>,
+    back: *const Node<K, V>,
+}
+
+impl<'a, K: Ord, V> Iterator for Range<'a, K, V> {
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // println!("next trace 0 {:?}", self.back);
+
+        if self.back.is_null() {
+            return None;
+        }
+
+        // println!("next trace 1");
+
+        match self.front.take() {
+            Some(node) => {
+                let node_ptr :*const _ = node;
+                if node_ptr != self.back {
+                    self.front = node.next.as_ref().map(|node| { & **node});
+                }
+                Some((&node.key, &node.value))
+            }
+            None => None,
+        }
+    }
+}
+
+struct RangeMut<'a, K :'a, V: 'a> {
+    front: Option<&'a mut Node<K, V>>,
+    back: *const Node<K, V>,
+}
+
+impl<'a, K: Ord, V> Iterator for RangeMut<'a, K, V> {
+    type Item = (&'a K, &'a mut V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.back.is_null() {
+            return None;
+        }
+
+        match self.front.take() {
+            Some(node) => {
+                let node_ptr :*const _ = node;
+                if node_ptr != self.back {
+                    self.front = node.next.as_mut().map(|node| { &mut **node});
+                }
+                Some((&node.key, &mut node.value))
+            }
+            None => None,
+        }
+    }
+}
+
+impl<K: Ord + Debug, V: Debug> SkipList<K, V> {
     pub fn new() -> SkipList<K, V> {
         SkipList {
             nexts: vec![],
@@ -81,6 +141,267 @@ impl<K: Ord, V> SkipList<K, V> {
     // split
     // contains
     // clears
+
+    fn pop(&mut self) -> Option<(K, V)> {
+        match self.next.take() {
+            Some(mut node) => {
+                self.next = node.next.take();
+                for (i, n) in node.nexts.iter().enumerate() {
+                    self.nexts[i] = *n;
+                }
+                if *self.nexts.last().unwrap() == std::ptr::null_mut() {
+                    self.nexts.pop();
+                }
+                Some((node.key, node.value))
+            },
+            None => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn range<T: ?Sized+Debug, R>(&self, range: R) -> Range<'_, K, V> 
+        where T: Ord, K: Borrow<T>, R: RangeBounds<T> {
+        if self.next.is_none() {
+            return Range { front: None, back: std::ptr::null() };
+        }
+
+        let front_bound = match range.start_bound() {
+            Bound::Unbounded => Some(&**self.next.as_ref().unwrap()),
+            Bound::Included(key) => self._front_include(key),
+            Bound::Excluded(key) => self._front_exclude(key),
+        };
+
+        // println!("first nexts trace {:?}", self.nexts);
+        // println!("first trace {:?}", self.next);
+        // println!("range trace 1 {:?}", front_bound);
+
+        if front_bound.is_none() {
+            return Range { front: None, back: std::ptr::null() };
+        }
+
+        // println!("range trace 2");
+
+        let front_key = &front_bound.as_ref().unwrap().key;
+
+        let back_bound = match range.end_bound() {
+            Bound::Unbounded => self._get_last_node(),
+            Bound::Included(key) => {
+                // println!("back_bound included");
+                match key.cmp(front_key.borrow()) {
+                    Ordering::Greater | Ordering::Equal => self._back_include_ptr(key),
+                    Ordering::Less => std::ptr::null(),
+                }
+            },
+            Bound::Excluded(key) => {
+                // println!("back_bound excluded");
+                match key.cmp(front_key.borrow()) {
+                    Ordering::Greater => {
+                        // println!("back_bound greater");
+                        self._back_exclude_ptr(key)
+                    }
+                    Ordering::Less | Ordering::Equal => std::ptr::null(),
+                }
+            }
+        };
+
+        // println!("range trace 3");
+
+        if back_bound.is_null() {
+            return Range { front: None, back: std::ptr::null() };
+        }
+
+        // println!("range trace 4 {:?}", unsafe { &(&*back_bound).key });
+
+        Range { front: front_bound, back: back_bound }
+    }
+
+    #[allow(dead_code)]
+    fn range_mut<Q: ?Sized, R>(&mut self, range: R) -> RangeMut<'_, K, V>
+    where Q: Ord + Debug, K: Borrow<Q>, R: RangeBounds<Q> {
+        if self.next.is_none() {
+            return RangeMut { front: None, back: std::ptr::null() };
+        }
+
+        let front_bound_ptr = match range.start_bound() {
+            Bound::Unbounded => self.nexts[0],
+            Bound::Included(key) => self._front_include_ptr(key),
+            Bound::Excluded(key) => self._front_exclude_ptr(key),
+        };
+
+        if front_bound_ptr.is_null() {
+            return RangeMut { front: None, back: std::ptr::null() };
+        }
+
+        let front_bound = unsafe { Some(&mut *front_bound_ptr)};
+        let front_key = &front_bound.as_ref().unwrap().key;
+
+        let back_bound = match range.end_bound() {
+            Bound::Unbounded => self._get_last_node(),
+            Bound::Included(key) => {
+                match key.cmp(front_key.borrow()) {
+                    Ordering::Greater | Ordering::Equal => self._back_include_ptr(key),
+                    Ordering::Less => std::ptr::null(),
+                }
+            },
+            Bound::Excluded(key) => {
+                match key.cmp(front_key.borrow()) {
+                    Ordering::Greater => self._back_exclude_ptr(key),
+                    Ordering::Less | Ordering::Equal => std::ptr::null(),
+                }
+            }
+        };
+
+        if back_bound.is_null() {
+            return RangeMut { front: None, back: std::ptr::null() };
+        }
+
+        RangeMut { front: front_bound, back: back_bound }
+    }
+
+    fn _front_include<Q: ?Sized>(&self, key :&Q) -> Option<& Node<K, V>>
+    where K: Borrow<Q>,
+          Q: Ord + Debug,
+    {
+
+        // println!("front_include: {:?}", key);
+        if self.next.is_none() {
+            return None
+        }
+
+        let pre_ptr = self._get_pre_node(key);
+        // println!("front_include pre_ptr: {:?}", pre_ptr);
+        if !pre_ptr.is_null() {
+            let pre = unsafe {
+                &*pre_ptr
+            };
+            match pre.next.as_ref() {
+                None => None,
+                Some(node) => {
+                    Some(&**node)
+                }
+            }
+        } else {
+            Some(&**self.next.as_ref().unwrap())
+        }
+    }
+
+    fn _front_include_ptr<Q: ?Sized>(&self, key :&Q) -> *mut Node<K, V>
+    where K: Borrow<Q>,
+          Q: Ord + Debug,
+    {
+        if self.next.is_none() {
+            return std::ptr::null_mut();
+        }
+
+        let pre_ptr = self._get_pre_node(key);
+        if !pre_ptr.is_null() {
+            let pre = unsafe { &*pre_ptr };
+            match pre.next.as_ref() {
+                None => std::ptr::null_mut(),
+                Some(_) => pre.nexts[0],
+            }
+        } else {
+            self.nexts[0]
+        }
+    }
+
+    fn _front_exclude<Q: ?Sized>(&self, key :&Q) -> Option<& Node<K, V>>
+    where K: Borrow<Q>,
+          Q: Ord + Debug,
+    {
+        if self.next.is_none() {
+            return None
+        }
+
+        let pre_ptr = self._get_pre_node(key);
+        let current;
+        if !pre_ptr.is_null() {
+            let pre = unsafe { &*pre_ptr };
+            match pre.next.as_ref() {
+                None => current = None,
+                Some(node) => current = Some(&**node),
+            };
+        } else {
+            current = Some(&**self.next.as_ref().unwrap());
+        }
+
+        current.and_then(|node| {
+            match key.cmp(node.key.borrow()) {
+                Ordering::Equal => node.next.as_ref().map(|next| {&**next}),
+                Ordering::Greater => Some(node),
+                Ordering::Less => unreachable!(),
+            }
+        })
+    }
+
+    fn _front_exclude_ptr<Q: ?Sized>(&self, key :&Q) -> *mut Node<K, V>
+    where K: Borrow<Q>,
+          Q: Ord + Debug,
+    {
+        if self.next.is_none() {
+            return std::ptr::null_mut()
+        }
+
+        let pre_ptr = self._get_pre_node(key);
+        let current;
+        let mut current_ptr = std::ptr::null_mut();
+        if !pre_ptr.is_null() {
+            let pre = unsafe { &*pre_ptr };
+            match pre.next.as_ref() {
+                None => current = None,
+                Some(node) => {
+                    current = Some(&**node);
+                    current_ptr = pre.nexts[0];
+                }
+            };
+        } else {
+            current = Some(&**self.next.as_ref().unwrap());
+            current_ptr = self.nexts[0];
+        }
+
+        if current.is_none() {
+            return std::ptr::null_mut();
+        }
+
+        let node = current.unwrap();
+        match key.cmp(node.key.borrow()) {
+            Ordering::Equal => node.nexts[0],
+            Ordering::Greater => current_ptr,
+            Ordering::Less => unreachable!(),
+        }
+    }
+
+    fn _back_include_ptr<Q: ?Sized>(&self, key :&Q) -> *const Node<K,V>
+    where K: Borrow<Q>,
+          Q: Ord + Debug,
+    {
+        let pre_ptr = self._get_pre_node(key);
+        let current;
+        if !pre_ptr.is_null() {
+            let pre_node = unsafe { &*pre_ptr };
+            current = pre_node.next.as_ref().map(|node| {&**node})
+        } else {
+            current = Some(&**self.next.as_ref().unwrap())
+        }
+
+        match current {
+            None => pre_ptr as *const _,
+            Some(node) => {
+                match key.cmp(node.key.borrow()) {
+                    Ordering::Equal => node as *const _,
+                    Ordering::Greater => pre_ptr as *const _,
+                    Ordering::Less => unreachable!(),
+                }
+            }
+        }
+    }
+
+    fn _back_exclude_ptr<Q: ?Sized>(&self, key :&Q) -> *const Node<K, V>
+    where K: Borrow<Q>,
+          Q: Ord + Debug,
+    {
+        self._get_pre_node(key) as *const _
+    }
 
     // Remove next node, leaving nexts untouched.
     // Returns contents that was removed.
@@ -125,7 +446,7 @@ impl<K: Ord, V> SkipList<K, V> {
         }
     }
 
-    fn choose_level(&self, max: usize) -> usize {
+    fn _choose_level(&self, max: usize) -> usize {
         let mut num = random::<usize>();
         let mut level = 0;
         while level < max {
@@ -139,7 +460,7 @@ impl<K: Ord, V> SkipList<K, V> {
     }
 
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
-        let mut level = self.choose_level(self.nexts.len());
+        let mut level = self._choose_level(self.nexts.len());
         if level == self.nexts.len() {
             self.nexts.push(std::ptr::null_mut())
         }
@@ -266,8 +587,7 @@ impl<K: Ord, V> SkipList<K, V> {
         result.map(|(_, v)| v)
     }
 
-    #[allow(dead_code)]
-    fn get_node<Q: ?Sized>(&self, q: &Q) -> *mut Node<K, V>
+    fn _get_node<Q: ?Sized>(&self, q: &Q) -> *mut Node<K, V>
     where
         K: Borrow<Q>,
         Q: Ord,
@@ -299,13 +619,71 @@ impl<K: Ord, V> SkipList<K, V> {
         p_result
     }
 
+    fn _get_pre_node<Q: ?Sized>(&self, q: &Q) -> *mut Node<K, V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + Debug,
+    {
+        if self.next.is_none() {
+            return std::ptr::null_mut();
+        }
+
+        let mut nexts = &self.nexts;
+        let mut level = self.nexts.len() - 1;
+        let mut pre = std::ptr::null_mut();
+        loop {
+            if !nexts[level].is_null() {
+                let tmp_key = unsafe { &(*nexts[level]).key };
+                // println!("get_pre_node: q: {:?}, tmp_key: {:?}", q, tmp_key);
+                match q.cmp(tmp_key.borrow()) {
+                    Ordering::Greater => {
+                        pre = nexts[level];
+                        nexts = unsafe { &(*nexts[level]).nexts };
+                        continue
+                    },
+                    Ordering::Equal | Ordering::Less => (),
+                }
+            }
+            if level == 0 {
+                break;
+            }
+            level -= 1;
+        }
+
+        // println!("get_pre_node result: q: {:?}, result: {:?}", q, unsafe { &(&*pre).key });
+
+        pre
+    }
+
+    fn _get_last_node(&self) -> *mut Node<K, V> {
+        if self.nexts.len() == 0 {
+            return std::ptr::null_mut();
+        }
+        let mut nexts = &self.nexts;
+        let mut level = self.nexts.len() - 1;
+        let mut node = std::ptr::null_mut();
+        loop {
+            if !nexts[level].is_null() {
+                node = nexts[level];
+                nexts = unsafe { &(*nexts[level]).nexts };
+                continue;
+            }
+            if level == 0 {
+                break;
+            }
+            level -= 1;
+        }
+
+        node
+    }
+
     #[allow(dead_code)]
     pub fn get<Q: ?Sized>(&self, q: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Ord,
     {
-        let p_result = self.get_node(q);
+        let p_result = self._get_node(q);
 
         if !p_result.is_null() {
             let result_node = unsafe { &*p_result };
@@ -321,7 +699,7 @@ impl<K: Ord, V> SkipList<K, V> {
         K: Borrow<Q>,
         Q: Ord,
     {
-        let p_result = self.get_node(q);
+        let p_result = self._get_node(q);
 
         if !p_result.is_null() {
             let result_node = unsafe { &mut *p_result };
@@ -341,6 +719,10 @@ impl<K: Ord, V> SkipList<K, V> {
         IterMut {
             next: self.next.as_mut().map(|node| &mut **node),
         }
+    }
+
+    pub fn into_iter(self) -> IntoIter<K, V> {
+        IntoIter(self)
     }
 }
 
@@ -373,27 +755,22 @@ impl<'a, K, V> Iterator for IterMut<'a, K, V> {
         })
     }
 }
-// pub enum Entry<'a, K: 'a, V: 'a> {
-//     /// A vacant entry.
-//     Vacant(VacantEntry<'a, K, V>),
 
-//     /// An occupied entry.
-//     Occupied(OccupiedEntry<'a, K, V>),
-// }
+pub struct IntoIter<K, V>(SkipList<K, V>);
 
-// pub struct Range<'a, K: 'a, V: 'a> {
-//     front: Handle<NodeRef<marker::Immut<'a>, K, V, marker::Leaf>, marker::Edge>,
-//     back: Handle<NodeRef<marker::Immut<'a>, K, V, marker::Leaf>, marker::Edge>,
-// }
+impl<K: Ord, V> Iterator for IntoIter<K, V> {
+    type Item = (K, V);
 
-// pub struct Iter<'a, K: 'a, V: 'a> {
-//     range: Range<'a, K, V>,
-//     length: usize,
-// }
-
-// impl<K, V> Iterator for SkipList<K, V> {
-
-// }
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.0.next.take() {
+            Some(mut node) => {
+                self.0.next = node.next.take();
+                Some((node.key, node.value))
+            },
+            None => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -451,7 +828,7 @@ mod tests {
         println!("dd: {:?}", sk.get_mut(&dd));
     }
 
-    #[test]
+    // #[test]
     fn iter() {
         let mut sk = SkipList::new();
         sk.insert("aa".to_string(), "aa1".to_string());
@@ -472,14 +849,69 @@ mod tests {
         for (k, v) in sk.iter() {
             println!("---3 {}: {}", k, v);
         }
+
+        for (k, v) in sk.into_iter() {
+            println!("---4 {}: {}", k, v);
+        }
     }
 
+    #[test]
+    fn range() {
+        let mut sk = SkipList::new();
+        sk.insert(10, 10);
+        sk.insert(15, 15);
+        sk.insert(12, 12);
+        sk.insert(52, 52);
+        sk.insert(22, 22);
+        sk.insert(32, 32);
 
+        println!("start iter");
+        for (k, v) in sk.iter() {
+            println!("iter_kv {}: {}", k, v)
+        }
 
-    struct Node {
-        a: i32,
-        b: i32,
+        println!("start range");
+        for (k, v) in sk.range(15..31) {
+            println!("range_kv {}: {}", k, v)
+        }
+
+        println!("start range2: 15..32");
+        for (k, v) in sk.range(15..32) {
+            println!("range_kv {}: {}", k, v)
+        }
+
+        println!("start range2: 15..");
+        for (k, v) in sk.range(15..) {
+            println!("range_kv {}: {}", k, v)
+        }
+
+        println!("start range2: ..33");
+        for (k, v) in sk.range(..33) {
+            println!("range_kv {}: {}", k, v)
+        }
+
+        println!("start range2: ..");
+        for (k, v) in sk.range(..) {
+            println!("range_kv {}: {}", k, v)
+        }
+
+        println!("start range_mut: 15..32");
+        for (k, v) in sk.range_mut(15..32) {
+            println!("range_mut_kv {}: {}", k, v);
+            *v = 1;
+        }
+
+        println!("start range3: ..");
+        for (k, v) in sk.range(..) {
+            println!("range_kv {}: {}", k, v)
+        }
+
     }
+
+    // struct Node {
+    //     a: i32,
+    //     b: i32,
+    // }
 
     // #[test]
     // fn multi_mut() {
