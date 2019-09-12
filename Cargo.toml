@@ -14,9 +14,9 @@ members = [
     "rfeatures",
     "radix-tree",
     "skiplist",
-    "httproxy",
+#    "httproxy",
 ]
 
-[[examples]]
-name = "impl_trait_mut_param"
-path = "examples/impl_trait_mut_param.rs"
+#[[examples]]
+#name = "impl_trait_mut_param"
+#path = "examples/impl_trait_mut_param.rs"
