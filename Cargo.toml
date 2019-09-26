@@ -14,9 +14,14 @@ members = [
     "rfeatures",
     "radix-tree",
     "skiplist",
+    "dynimpl",
 #    "httproxy",
 ]
 
-#[[examples]]
-#name = "impl_trait_mut_param"
-#path = "examples/impl_trait_mut_param.rs"
+[[examples]]
+name = "impl_trait_mut_param"
+path = "examples/impl_trait_mut_param.rs"
+
+[[examples]]
+name = "unsafe_pointer_behavior"
+path = "examples/unsafe_pointer_behavior.rs"
