@@ -1,6 +1,9 @@
 #[macro_use]
 extern crate bitflags;
 
+
+// run: cargo expand --example bitflag_expand
+
 bitflags! {
     struct Flags: u32 {
         const A = 0b00000001;
