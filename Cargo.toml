@@ -7,6 +7,9 @@ edition = "2018"
 [dependencies]
 rand = "0.7"
 
+[dependencies-dev]
+bitflags = "1.2.0"
+
 [workspace]
 
 members = [
@@ -25,3 +28,7 @@ path = "examples/impl_trait_mut_param.rs"
 [[examples]]
 name = "unsafe_pointer_behavior"
 path = "examples/unsafe_pointer_behavior.rs"
+
+[[examples]]
+name = "bitflag_expand"
+path = "examples/bitflag_expand.rs"
