@@ -1,7 +1,6 @@
 #[macro_use]
 extern crate bitflags;
 
-
 // run: cargo expand --example bitflag_expand
 
 bitflags! {
@@ -16,9 +15,9 @@ bitflags! {
 fn main() {
     let e1 = Flags::A | Flags::C;
     let e2 = Flags::B | Flags::C;
-    assert_eq!((e1 | e2), Flags::ABC);   // union
-    assert_eq!((e1 & e2), Flags::C);     // intersection
-    assert_eq!((e1 - e2), Flags::A);     // set difference
-    assert_eq!(!e2, Flags::A);           // set complement
+    assert_eq!((e1 | e2), Flags::ABC); // union
+    assert_eq!((e1 & e2), Flags::C); // intersection
+    assert_eq!((e1 - e2), Flags::A); // set difference
+    assert_eq!(!e2, Flags::A); // set complement
     println!("000{}xxx{:?}", 1, 2);
 }

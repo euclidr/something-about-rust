@@ -7,7 +7,7 @@ edition = "2018"
 [dependencies]
 rand = "0.7"
 
-[dependencies-dev]
+[dev-dependencies]
 bitflags = "1.2.0"
 
 [workspace]
