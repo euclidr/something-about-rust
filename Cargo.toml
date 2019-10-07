@@ -32,3 +32,7 @@ path = "examples/unsafe_pointer_behavior.rs"
 [[examples]]
 name = "bitflag_expand"
 path = "examples/bitflag_expand.rs"
+
+[[examples]]
+name = "memory_alignment"
+path = "examples/memory_alignment.rs"
